@@ -1,0 +1,122 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Sling Shift Catcher</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        width: 340px;
+        padding: 12px;
+      }
+
+      h2 {
+        margin: 0 0 10px 0;
+        font-size: 16px;
+      }
+
+      label {
+        display: block;
+        margin-top: 10px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      input[type="text"],
+      input[type="number"],
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 4px;
+        padding: 8px;
+        font-size: 13px;
+      }
+
+      textarea {
+        min-height: 110px;
+        resize: vertical;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .row input[type="checkbox"] {
+        margin: 0;
+      }
+
+      button {
+        margin-top: 12px;
+        width: 100%;
+        padding: 10px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      .status {
+        margin-top: 10px;
+        font-size: 12px;
+        color: green;
+        min-height: 16px;
+      }
+
+      .note {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #555;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Sling Shift Catcher</h2>
+
+    <div class="row">
+      <input id="enabled" type="checkbox" />
+      <label for="enabled" style="margin: 0; font-weight: normal"
+        >Enabled</label
+      >
+    </div>
+
+    <div class="row">
+      <input id="keepPinnedTab" type="checkbox" />
+      <label for="keepPinnedTab" style="margin: 0; font-weight: normal"
+        >Keep pinned watcher tab open</label
+      >
+    </div>
+
+    <div class="row">
+      <input id="dryRun" type="checkbox" />
+      <label for="dryRun" style="margin: 0; font-weight: normal"
+        >Dry run only</label
+      >
+    </div>
+
+    <label for="targetUrl">Target Sling chat URL</label>
+    <input id="targetUrl" type="text" />
+
+    <label for="replyText">Reply text</label>
+    <input id="replyText" type="text" />
+
+    <label for="cooldownSec">Cooldown between replies (seconds)</label>
+    <input id="cooldownSec" type="number" min="1" />
+
+    <label for="keywords">Keywords / phrases (one per line)</label>
+    <textarea id="keywords"></textarea>
+
+    <button id="saveBtn">Save settings</button>
+    <button id="openWatcherBtn">Open / Focus pinned watcher tab</button>
+
+    <div id="status" class="status"></div>
+
+    <div class="note">
+      Keep Dry run on first. Then open the pinned Sling tab and watch the
+      console logs.
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

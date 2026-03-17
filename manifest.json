@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Sling Shift Catcher",
+  "version": "0.2.0",
+  "description": "Keeps a pinned Sling chat open and replies to shift giveaway messages.",
+  "permissions": ["storage", "tabs", "alarms", "scripting"],
+  "host_permissions": ["https://app.getsling.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Sling Shift Catcher",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://app.getsling.com/messages/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
