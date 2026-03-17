@@ -42,6 +42,7 @@
     freshWindowMs: 30000,
     minReplyDelayMs: 600,
     maxReplyDelayMs: 1200,
+    maxMessageAgeMs: 2 * 60 * 1000,
   };
 
   let settings = null;
@@ -177,6 +178,51 @@
     );
   }
 
+  function parseSlingTimeToDate(timeText) {
+    const raw = (timeText || "").trim();
+    if (!raw) return null;
+
+    const match = raw.match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+    if (!match) return null;
+
+    let hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    const meridiem = match[3].toUpperCase();
+
+    if (meridiem === "AM") {
+      if (hours === 12) hours = 0;
+    } else {
+      if (hours !== 12) hours += 12;
+    }
+
+    const now = new Date();
+    const candidate = new Date(now);
+    candidate.setSeconds(0, 0);
+    candidate.setHours(hours, minutes, 0, 0);
+
+    // If it lands slightly in the future, assume it was yesterday near midnight.
+    if (candidate.getTime() - now.getTime() > 60 * 1000) {
+      candidate.setDate(candidate.getDate() - 1);
+    }
+
+    return candidate;
+  }
+
+  function getMessageAgeMsFromItem(item) {
+    const timeText = getMessageTimeText(item);
+    const postedAt = parseSlingTimeToDate(timeText);
+    if (!postedAt) return null;
+
+    return Date.now() - postedAt.getTime();
+  }
+
+  function isMessageWithinAgeLimit(item, maxAgeMs) {
+    const ageMs = getMessageAgeMsFromItem(item);
+    if (ageMs === null) return false;
+    if (ageMs < 0) return false;
+    return ageMs <= maxAgeMs;
+  }
+
   function isOwnMessageItem(item) {
     const { authorName, authorHref } = getMessageAuthorData(item);
 
@@ -216,6 +262,7 @@
       if (seenSignatures.includes(signature)) return;
 
       const { authorName, authorHref } = getMessageAuthorData(item);
+      const ageMs = getMessageAgeMsFromItem(item);
 
       matches.push({
         el: item,
@@ -223,6 +270,7 @@
         signature,
         authorName,
         authorHref,
+        ageMs,
       });
     });
 
@@ -435,17 +483,32 @@
 
       if (!match) return;
 
-      const firstSeenAt = await markCandidateSeen(match.signature);
-      const ageMs = Date.now() - firstSeenAt;
-
-      if (ageMs > settings.freshWindowMs) {
+      if (match.ageMs === null) {
         log(
-          "Skipping old matched message:",
+          "Skipping message because timestamp could not be parsed:",
+          match.text,
+        );
+
+        const nextState = {
+          seenSignatures: [
+            ...runtimeState.seenSignatures.slice(-99),
+            match.signature,
+          ],
+          lastReplyAt: runtimeState.lastReplyAt,
+        };
+
+        await setRuntimeState(nextState);
+        return;
+      }
+
+      if (match.ageMs > settings.maxMessageAgeMs) {
+        log(
+          "Skipping old message by timestamp:",
           match.text,
           "from:",
           match.authorName || match.authorHref || "unknown",
           "ageMs:",
-          ageMs,
+          match.ageMs,
         );
 
         const nextState = {
