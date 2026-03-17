@@ -20,6 +20,9 @@ const DEFAULTS = {
     "can anyone pick up",
     "pick up my shift",
   ].join("\n"),
+  freshWindowMs: 30000,
+  minReplyDelayMs: 600,
+  maxReplyDelayMs: 1200,
 };
 
 function setStatus(text, isError = false) {

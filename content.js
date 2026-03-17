@@ -4,6 +4,7 @@
   }
   let suppressObserver = false;
   window.__slingShiftCatcherLoaded = true;
+  const CANDIDATE_TIMES_KEY = "candidateFirstSeenTimesV1";
 
   const DEFAULTS = {
     enabled: true,
@@ -27,6 +28,9 @@
       "can anyone pick up",
       "pick up my shift",
     ].join("\n"),
+    freshWindowMs: 30000,
+    minReplyDelayMs: 600,
+    maxReplyDelayMs: 1200,
   };
 
   const STATE_KEY = "runtimeStateV2";
@@ -111,6 +115,34 @@
     range.collapse(false);
     selection.removeAllRanges();
     selection.addRange(range);
+  }
+
+  async function getCandidateTimes() {
+    const data = await chrome.storage.local.get(CANDIDATE_TIMES_KEY);
+    return data[CANDIDATE_TIMES_KEY] || {};
+  }
+
+  async function setCandidateTimes(map) {
+    await chrome.storage.local.set({ [CANDIDATE_TIMES_KEY]: map });
+  }
+
+  async function markCandidateSeen(signature) {
+    const map = await getCandidateTimes();
+    if (!map[signature]) {
+      map[signature] = Date.now();
+      await setCandidateTimes(map);
+    }
+    return map[signature] || Date.now();
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function getRandomInt(min, max) {
+    const lo = Math.ceil(min);
+    const hi = Math.floor(max);
+    return Math.floor(Math.random() * (hi - lo + 1)) + lo;
   }
 
   function getComposerPlainText(composer) {
@@ -234,6 +266,8 @@
         ? state.seenSignatures
         : [],
       lastReplyAt: Number(state.lastReplyAt) || 0,
+      lastSentText: state.lastSentText || "",
+      lastSentAt: Number(state.lastSentAt) || 0,
     };
   }
 
@@ -414,6 +448,14 @@
         return false;
       }
 
+      const delay = getRandomInt(
+        settings.minReplyDelayMs,
+        settings.maxReplyDelayMs,
+      );
+
+      log("Waiting before send:", delay, "ms");
+      await sleep(delay);
+
       sendButton.focus();
       sendButton.click();
       log("Reply sent.");
@@ -448,8 +490,45 @@
       );
 
       if (!match) return;
+      const looksLikeRecentOwnEcho =
+        normalizeText(match.text) ===
+          normalizeText(runtimeState.lastSentText) &&
+        Date.now() - runtimeState.lastSentAt < 20000;
 
-      log("Matched:", match.text);
+      if (looksLikeRecentOwnEcho) {
+        log("Skipping likely own recent message echo:", match.text);
+
+        const nextState = {
+          ...runtimeState,
+          seenSignatures: [
+            ...runtimeState.seenSignatures.slice(-99),
+            match.signature,
+          ],
+        };
+
+        await setRuntimeState(nextState);
+        return;
+      }
+
+      const firstSeenAt = await markCandidateSeen(match.signature);
+      const ageMs = Date.now() - firstSeenAt;
+
+      if (ageMs > settings.freshWindowMs) {
+        log("Skipping old matched message:", match.text, "ageMs:", ageMs);
+
+        const nextState = {
+          seenSignatures: [
+            ...runtimeState.seenSignatures.slice(-99),
+            match.signature,
+          ],
+          lastReplyAt: runtimeState.lastReplyAt,
+        };
+
+        await setRuntimeState(nextState);
+        return;
+      }
+
+      log("Matched:", match.text, "ageMs:", ageMs);
 
       // Mark it immediately so observer/heartbeat does not keep retrying it
       const nextState = {
@@ -471,6 +550,8 @@
 
       if (sent) {
         nextState.lastReplyAt = Date.now();
+        nextState.lastSentAt = Date.now();
+        nextState.lastSentText = settings.replyText;
         await setRuntimeState(nextState);
       } else {
         log("Reply attempt failed; message marked as attempted to avoid loop.");
