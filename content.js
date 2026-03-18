@@ -6,7 +6,6 @@
   const OWN_USER_NAME = "Chinmaya Garg";
 
   const STATE_KEY = "runtimeStateV4";
-  const CANDIDATE_TIMES_KEY = "candidateFirstSeenTimesV2";
 
   const DEFAULTS = {
     enabled: true,
@@ -38,6 +37,10 @@
       "Shift give away",
       "anyone able to work",
       "any one able to work",
+      "giveaway shift",
+      "give away shift",
+      "giveaway",
+      "give away",
     ].join("\n"),
     freshWindowMs: 30000,
     minReplyDelayMs: 600,
@@ -116,26 +119,6 @@
   async function setRuntimeState(nextState) {
     if (!isExtensionContextValid()) return;
     await chrome.storage.local.set({ [STATE_KEY]: nextState });
-  }
-
-  async function getCandidateTimes() {
-    if (!isExtensionContextValid()) return {};
-    const data = await chrome.storage.local.get(CANDIDATE_TIMES_KEY);
-    return data[CANDIDATE_TIMES_KEY] || {};
-  }
-
-  async function setCandidateTimes(map) {
-    if (!isExtensionContextValid()) return;
-    await chrome.storage.local.set({ [CANDIDATE_TIMES_KEY]: map });
-  }
-
-  async function markCandidateSeen(signature) {
-    const map = await getCandidateTimes();
-    if (!map[signature]) {
-      map[signature] = Date.now();
-      await setCandidateTimes(map);
-    }
-    return map[signature] || Date.now();
   }
 
   function onCorrectChat() {
@@ -487,6 +470,8 @@
         log(
           "Skipping message because timestamp could not be parsed:",
           match.text,
+          "from:",
+          match.authorName || match.authorHref || "unknown",
         );
 
         const nextState = {
@@ -501,7 +486,7 @@
         return;
       }
 
-      if (match.ageMs > settings.maxMessageAgeMs) {
+      if (match.ageMs < 0 || match.ageMs > settings.maxMessageAgeMs) {
         log(
           "Skipping old message by timestamp:",
           match.text,
@@ -529,7 +514,7 @@
         "from:",
         match.authorName || match.authorHref || "unknown",
         "ageMs:",
-        ageMs,
+        match.ageMs,
       );
 
       const nextState = {
