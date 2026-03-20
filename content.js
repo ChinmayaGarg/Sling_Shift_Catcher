@@ -45,8 +45,9 @@
     freshWindowMs: 30000,
     minReplyDelayMs: 600,
     maxReplyDelayMs: 1200,
-    maxMessageAgeMs: 2 * 60 * 10000000000,
+    maxMessageAgeMs: 2 * 60 * 1000,
     perAuthorCooldownMs: 30 * 60 * 1000,
+    autoPauseAfterSend: true,
   };
 
   let settings = null;
@@ -185,6 +186,21 @@
     return normalizeText(
       timeEl?.getAttribute("datetime") || timeEl?.innerText || "",
     );
+  }
+
+  async function turnOnDryRunAfterSuccessfulReply() {
+    if (!isExtensionContextValid()) return;
+
+    settings = {
+      ...settings,
+      dryRun: true,
+    };
+
+    await chrome.storage.sync.set({
+      dryRun: true,
+    });
+
+    log("Auto-paused: dryRun turned ON after successful reply.");
   }
 
   const SHIFT_START_MIN = 9 * 60; // 9:00 AM
@@ -784,6 +800,9 @@
           ...nextState.authorReplyTimes,
           [authorKey]: sentAt,
         };
+        if (settings.autoPauseAfterSend) {
+          await turnOnDryRunAfterSuccessfulReply();
+        }
         await setRuntimeState(nextState);
       } else {
         log("Reply attempt failed; message marked as attempted to avoid loop.");
