@@ -144,6 +144,7 @@
   }
 
   async function setRuntimeState(nextState) {
+    log("Updating runtime state:", nextState);
     if (!isExtensionContextValid()) return;
     await chrome.storage.local.set({ [STATE_KEY]: nextState });
   }
@@ -211,8 +212,10 @@
 
     const patterns = [
       /\b(mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday)\b/,
-      /\b(today|tomorrow|tonight|this morning|this afternoon|this evening)\b/,
+      /\b(today|tomorrow|tmrw|tonight|afternoon|evening)\b/,
       /\b\d{1,2}[/-]\d{1,2}\b/,
+      /\b\d{1,2}:\d{2}\s?(am|pm)\b/,
+      /\b\d{1,2}\s?(am|pm)\b/,
       /\b(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\b/,
     ];
 
@@ -332,53 +335,62 @@
     const hasPhrase = hasGiveawayPhrase(text, keywords);
     const hasDay = containsDayMention(text);
     const hasAllowedRange = isAllowedShiftWindow(text);
-
-    return hasPhrase && hasAllowedRange && hasDay;
+    const hasBlockedWords = containsBlockedTestWords(text);
+    // log(
+    //   "isEligibleShiftMessage",
+    //   text,
+    //   !hasBlockedWords,
+    //   hasPhrase,
+    //   hasAllowedRange,
+    //   hasDay,
+    // );
+    return !hasBlockedWords && hasPhrase && (hasAllowedRange || hasDay);
   }
 
-  function containsTimeOrDayMention(text) {
-    const t = normalizeText(text);
+  // function containsTimeOrDayMention(text) {
+  //   const t = normalizeText(text);
 
-    const patterns = [
-      /\b(mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday)\b/,
-      /\b(today|tomorrow|tonight|this morning|this afternoon|this evening)\b/,
-      /\b\d{1,2}:\d{2}\s?(am|pm)\b/,
-      /\b\d{1,2}\s?(am|pm)\b/,
-      /\b\d{1,2}[/-]\d{1,2}\b/,
-      /\bjan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december\b/,
-    ];
+  //   const patterns = [
+  //     /\b(mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday)\b/,
+  //     /\b(today|tomorrow|tonight|this morning|this afternoon|this evening)\b/,
+  //     /\b\d{1,2}:\d{2}\s?(am|pm)\b/,
+  //     /\b\d{1,2}\s?(am|pm)\b/,
+  //     /\b\d{1,2}[/-]\d{1,2}\b/,
+  //     /\bjan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december\b/,
+  //   ];
 
-    return patterns.some((re) => re.test(t));
-  }
+  //   return patterns.some((re) => re.test(t));
+  // }
 
-  function containsShiftContext(text) {
-    const t = normalizeText(text);
-    return /\b(shift|work|coverage|cover|open|pickup|pick up|close|closing|opening)\b/.test(
-      t,
-    );
-  }
+  // function containsShiftContext(text) {
+  //   const t = normalizeText(text);
+  //   return /\b(shift|work|coverage|cover|open|pickup|pick up|close|closing|opening)\b/.test(
+  //     t,
+  //   );
+  // }
 
   function containsBlockedTestWords(text) {
     const t = normalizeText(text);
-    return /\b(test|testing|bot|keyword|trigger|try this|checking|lol|haha|lmao|shadow|delivery|)\b/.test(
+    // log("Checking for blocked test words in:", text);
+    return /\b(test|testing|bot|keyword|trigger|try this|checking|lol|haha|lmao|shadow|delivery|😀|😃|😄|😁|😆|😅|🤣|😂|🙂|😉|😊|😇|🥰|😍|🤩|😘|😗|☺️|😚|😙|🥲|😏)\b/.test(
       t,
     );
   }
 
-  function isLikelyRealShiftGiveaway(text) {
-    const t = normalizeText(text);
+  // function isLikelyRealShiftGiveaway(text) {
+  //   const t = normalizeText(text);
 
-    const hasKeyword = splitKeywords(settings.keywords).some((k) =>
-      t.includes(k),
-    );
-    const hasTimeOrDate = containsTimeOrDayMention(t);
-    const hasShiftContext = containsShiftContext(t);
-    const hasBlockedWords = containsBlockedTestWords(t);
+  //   const hasKeyword = splitKeywords(settings.keywords).some((k) =>
+  //     t.includes(k),
+  //   );
+  //   const hasTimeOrDate = containsTimeOrDayMention(t);
+  //   // const hasShiftContext = containsShiftContext(t);
+  //   const hasBlockedWords = containsBlockedTestWords(t);
 
-    log("Candidate passed filters:", text);
+  //   log("Candidate passed filters:", text);
 
-    return hasKeyword && hasTimeOrDate && hasShiftContext && !hasBlockedWords;
-  }
+  //   return hasKeyword && hasTimeOrDate && !hasBlockedWords;
+  // }
 
   function parseSlingTimeToDate(timeText) {
     const raw = (timeText || "").trim();
@@ -460,9 +472,10 @@
       const eligible = isEligibleShiftMessage(text, keywords);
       if (!eligible) return;
 
-      if (!isLikelyRealShiftGiveaway(text)) return;
+      // if (!isLikelyRealShiftGiveaway(text)) return;
 
       const signature = buildMessageSignature(item, index);
+      // log("Found candidate message:", text, "signature:", signature);
       if (seenSignatures.includes(signature)) return;
 
       const { authorName, authorHref } = getMessageAuthorData(item);
