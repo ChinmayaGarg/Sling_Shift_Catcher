@@ -45,7 +45,8 @@
     freshWindowMs: 30000,
     minReplyDelayMs: 600,
     maxReplyDelayMs: 1200,
-    maxMessageAgeMs: 2 * 60 * 1000,
+    maxMessageAgeMs: 2 * 60 * 10000000000,
+    perAuthorCooldownMs: 30 * 60 * 1000,
   };
 
   let settings = null;
@@ -92,6 +93,26 @@
       .filter(Boolean);
   }
 
+  function getAuthorCooldownKey(match) {
+    return match.authorHref || match.authorName || "unknown-author";
+  }
+
+  function pruneOldAuthorReplyTimes(
+    authorReplyTimes,
+    now,
+    perAuthorCooldownMs,
+  ) {
+    const pruned = {};
+
+    for (const [key, ts] of Object.entries(authorReplyTimes || {})) {
+      if (now - Number(ts) <= perAuthorCooldownMs) {
+        pruned[key] = Number(ts);
+      }
+    }
+
+    return pruned;
+  }
+
   async function getSettings() {
     if (!isExtensionContextValid()) return DEFAULTS;
     return chrome.storage.sync.get(DEFAULTS);
@@ -102,6 +123,7 @@
       return {
         seenSignatures: [],
         lastReplyAt: 0,
+        authorReplyTimes: {},
       };
     }
 
@@ -113,6 +135,10 @@
         ? state.seenSignatures
         : [],
       lastReplyAt: Number(state.lastReplyAt) || 0,
+      authorReplyTimes:
+        state.authorReplyTimes && typeof state.authorReplyTimes === "object"
+          ? state.authorReplyTimes
+          : {},
     };
   }
 
@@ -159,6 +185,183 @@
     return normalizeText(
       timeEl?.getAttribute("datetime") || timeEl?.innerText || "",
     );
+  }
+
+  const SHIFT_START_MIN = 9 * 60; // 9:00 AM
+  const SHIFT_END_MAX = 22 * 60; // 10:00 PM
+
+  function containsDayMention(text) {
+    const t = normalizeText(text);
+
+    const patterns = [
+      /\b(mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday)\b/,
+      /\b(today|tomorrow|tonight|this morning|this afternoon|this evening)\b/,
+      /\b\d{1,2}[/-]\d{1,2}\b/,
+      /\b(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\b/,
+    ];
+
+    return patterns.some((re) => re.test(t));
+  }
+
+  function parseLooseTimeToken(token, positionInRange) {
+    if (!token) return null;
+
+    const raw = token.trim().toLowerCase();
+
+    // h:mm am/pm  OR  h:mm
+    let m = raw.match(/^(\d{1,2}):(\d{2})(?:\s*(am|pm))?$/i);
+    if (m) {
+      let hour = Number(m[1]);
+      const minute = Number(m[2]);
+      const meridiem = m[3] ? m[3].toLowerCase() : null;
+
+      if (minute < 0 || minute > 59) return null;
+
+      if (meridiem) {
+        if (hour < 1 || hour > 12) return null;
+        if (meridiem === "am") {
+          if (hour === 12) hour = 0;
+        } else {
+          if (hour !== 12) hour += 12;
+        }
+        return hour * 60 + minute;
+      }
+
+      // No am/pm
+      if (hour === 12) return 12 * 60 + minute;
+
+      if (hour >= 1 && hour <= 8) {
+        return (hour + 12) * 60 + minute; // PM
+      }
+
+      if (hour >= 9 && hour <= 11) {
+        if (positionInRange === "start") {
+          return hour * 60 + minute; // AM
+        }
+        return (hour + 12) * 60 + minute; // PM
+      }
+
+      return null;
+    }
+
+    // h am/pm  OR  h
+    m = raw.match(/^(\d{1,2})(?:\s*(am|pm))?$/i);
+    if (m) {
+      let hour = Number(m[1]);
+      const meridiem = m[2] ? m[2].toLowerCase() : null;
+
+      if (hour < 1 || hour > 12) return null;
+
+      if (meridiem) {
+        if (meridiem === "am") {
+          if (hour === 12) hour = 0;
+        } else {
+          if (hour !== 12) hour += 12;
+        }
+        return hour * 60;
+      }
+
+      // No am/pm
+      if (hour === 12) return 12 * 60;
+
+      if (hour >= 1 && hour <= 8) {
+        return (hour + 12) * 60; // PM
+      }
+
+      if (hour >= 9 && hour <= 11) {
+        if (positionInRange === "start") {
+          return hour * 60; // AM
+        }
+        return (hour + 12) * 60; // PM
+      }
+    }
+
+    return null;
+  }
+
+  function extractShiftRange(text) {
+    const t = normalizeText(text);
+
+    const rangeRe =
+      /\b(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\b/i;
+
+    const m = t.match(rangeRe);
+    if (!m) return null;
+
+    const rawStart = m[1];
+    const rawEnd = m[2];
+
+    const startMin = parseLooseTimeToken(rawStart, "start");
+    const endMin = parseLooseTimeToken(rawEnd, "end");
+
+    if (startMin == null || endMin == null) return null;
+    if (endMin <= startMin) return null;
+
+    return { rawStart, rawEnd, startMin, endMin };
+  }
+
+  function isAllowedShiftWindow(text) {
+    const range = extractShiftRange(text);
+    if (!range) return false;
+
+    return range.startMin >= SHIFT_START_MIN && range.endMin <= SHIFT_END_MAX;
+  }
+
+  function hasGiveawayPhrase(text, keywords) {
+    const t = normalizeText(text);
+    return keywords.some((k) => t.includes(k));
+  }
+
+  function isEligibleShiftMessage(text, keywords) {
+    const hasPhrase = hasGiveawayPhrase(text, keywords);
+    const hasDay = containsDayMention(text);
+    const hasAllowedRange = isAllowedShiftWindow(text);
+
+    return hasPhrase && hasAllowedRange && hasDay;
+  }
+
+  function containsTimeOrDayMention(text) {
+    const t = normalizeText(text);
+
+    const patterns = [
+      /\b(mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday)\b/,
+      /\b(today|tomorrow|tonight|this morning|this afternoon|this evening)\b/,
+      /\b\d{1,2}:\d{2}\s?(am|pm)\b/,
+      /\b\d{1,2}\s?(am|pm)\b/,
+      /\b\d{1,2}[/-]\d{1,2}\b/,
+      /\bjan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december\b/,
+    ];
+
+    return patterns.some((re) => re.test(t));
+  }
+
+  function containsShiftContext(text) {
+    const t = normalizeText(text);
+    return /\b(shift|work|coverage|cover|open|pickup|pick up|close|closing|opening)\b/.test(
+      t,
+    );
+  }
+
+  function containsBlockedTestWords(text) {
+    const t = normalizeText(text);
+    return /\b(test|testing|bot|keyword|trigger|try this|checking|lol|haha|lmao|shadow|delivery|)\b/.test(
+      t,
+    );
+  }
+
+  function isLikelyRealShiftGiveaway(text) {
+    const t = normalizeText(text);
+
+    const hasKeyword = splitKeywords(settings.keywords).some((k) =>
+      t.includes(k),
+    );
+    const hasTimeOrDate = containsTimeOrDayMention(t);
+    const hasShiftContext = containsShiftContext(t);
+    const hasBlockedWords = containsBlockedTestWords(t);
+
+    log("Candidate passed filters:", text);
+
+    return hasKeyword && hasTimeOrDate && hasShiftContext && !hasBlockedWords;
   }
 
   function parseSlingTimeToDate(timeText) {
@@ -238,8 +441,10 @@
 
       if (isOwnMessageItem(item)) return;
 
-      const matchesKeyword = keywords.some((k) => text.includes(k));
-      if (!matchesKeyword) return;
+      const eligible = isEligibleShiftMessage(text, keywords);
+      if (!eligible) return;
+
+      if (!isLikelyRealShiftGiveaway(text)) return;
 
       const signature = buildMessageSignature(item, index);
       if (seenSignatures.includes(signature)) return;
@@ -466,6 +671,41 @@
 
       if (!match) return;
 
+      const authorKey = getAuthorCooldownKey(match);
+      const prunedAuthorReplyTimes = pruneOldAuthorReplyTimes(
+        runtimeState.authorReplyTimes,
+        now,
+        settings.perAuthorCooldownMs,
+      );
+
+      const lastReplyToAuthorAt = Number(
+        prunedAuthorReplyTimes[authorKey] || 0,
+      );
+
+      if (now - lastReplyToAuthorAt < settings.perAuthorCooldownMs) {
+        log(
+          "Skipping author due to 30-minute cooldown:",
+          match.authorName || match.authorHref || "unknown",
+          "minutesRemaining:",
+          Math.ceil(
+            (settings.perAuthorCooldownMs - (now - lastReplyToAuthorAt)) /
+              60000,
+          ),
+        );
+
+        const nextState = {
+          seenSignatures: [
+            ...runtimeState.seenSignatures.slice(-99),
+            match.signature,
+          ],
+          lastReplyAt: runtimeState.lastReplyAt,
+          authorReplyTimes: prunedAuthorReplyTimes,
+        };
+
+        await setRuntimeState(nextState);
+        return;
+      }
+
       if (match.ageMs === null) {
         log(
           "Skipping message because timestamp could not be parsed:",
@@ -480,6 +720,7 @@
             match.signature,
           ],
           lastReplyAt: runtimeState.lastReplyAt,
+          authorReplyTimes: prunedAuthorReplyTimes,
         };
 
         await setRuntimeState(nextState);
@@ -502,6 +743,7 @@
             match.signature,
           ],
           lastReplyAt: runtimeState.lastReplyAt,
+          authorReplyTimes: prunedAuthorReplyTimes,
         };
 
         await setRuntimeState(nextState);
@@ -523,6 +765,7 @@
           match.signature,
         ],
         lastReplyAt: runtimeState.lastReplyAt,
+        authorReplyTimes: prunedAuthorReplyTimes,
       };
 
       await setRuntimeState(nextState);
@@ -535,7 +778,12 @@
       const sent = await replyNow(settings.replyText);
 
       if (sent) {
-        nextState.lastReplyAt = Date.now();
+        const sentAt = Date.now();
+        nextState.lastReplyAt = sentAt;
+        nextState.authorReplyTimes = {
+          ...nextState.authorReplyTimes,
+          [authorKey]: sentAt,
+        };
         await setRuntimeState(nextState);
       } else {
         log("Reply attempt failed; message marked as attempted to avoid loop.");
