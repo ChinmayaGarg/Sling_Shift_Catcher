@@ -336,61 +336,15 @@
     const hasDay = containsDayMention(text);
     const hasAllowedRange = isAllowedShiftWindow(text);
     const hasBlockedWords = containsBlockedTestWords(text);
-    // log(
-    //   "isEligibleShiftMessage",
-    //   text,
-    //   !hasBlockedWords,
-    //   hasPhrase,
-    //   hasAllowedRange,
-    //   hasDay,
-    // );
     return !hasBlockedWords && hasPhrase && (hasAllowedRange || hasDay);
   }
 
-  // function containsTimeOrDayMention(text) {
-  //   const t = normalizeText(text);
-
-  //   const patterns = [
-  //     /\b(mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday)\b/,
-  //     /\b(today|tomorrow|tonight|this morning|this afternoon|this evening)\b/,
-  //     /\b\d{1,2}:\d{2}\s?(am|pm)\b/,
-  //     /\b\d{1,2}\s?(am|pm)\b/,
-  //     /\b\d{1,2}[/-]\d{1,2}\b/,
-  //     /\bjan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december\b/,
-  //   ];
-
-  //   return patterns.some((re) => re.test(t));
-  // }
-
-  // function containsShiftContext(text) {
-  //   const t = normalizeText(text);
-  //   return /\b(shift|work|coverage|cover|open|pickup|pick up|close|closing|opening)\b/.test(
-  //     t,
-  //   );
-  // }
-
   function containsBlockedTestWords(text) {
     const t = normalizeText(text);
-    // log("Checking for blocked test words in:", text);
     return /\b(test|testing|bot|keyword|trigger|try this|checking|lol|haha|lmao|shadow|delivery|😀|😃|😄|😁|😆|😅|🤣|😂|🙂|😉|😊|😇|🥰|😍|🤩|😘|😗|☺️|😚|😙|🥲|😏)\b/.test(
       t,
     );
   }
-
-  // function isLikelyRealShiftGiveaway(text) {
-  //   const t = normalizeText(text);
-
-  //   const hasKeyword = splitKeywords(settings.keywords).some((k) =>
-  //     t.includes(k),
-  //   );
-  //   const hasTimeOrDate = containsTimeOrDayMention(t);
-  //   // const hasShiftContext = containsShiftContext(t);
-  //   const hasBlockedWords = containsBlockedTestWords(t);
-
-  //   log("Candidate passed filters:", text);
-
-  //   return hasKeyword && hasTimeOrDate && !hasBlockedWords;
-  // }
 
   function parseSlingTimeToDate(timeText) {
     const raw = (timeText || "").trim();
