@@ -34,7 +34,6 @@
       "can anyone pick up",
       "pick up my shift",
       "shift giveaway",
-      "shift open",
       "shift needs coverage",
       "shift coverage",
       "shift give away",
@@ -338,7 +337,7 @@
     // Require BOTH:
     // 1) a giveaway phrase
     // 2) a valid time range inside your allowed window
-    return !hasBlockedWords && hasPhrase && (hasAllowedRange || hasDay);
+    return !hasBlockedWords && hasPhrase && hasAllowedRange;
   }
 
   function parseSlingTimeToDate(timeText) {
