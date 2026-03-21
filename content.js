@@ -50,6 +50,15 @@
     perAuthorCooldownMs: 30 * 60 * 1000,
     autoPauseAfterSend: true,
     sameDayFeasibilityBufferMin: 15,
+    busyWindowsByDay: {
+      monday: [],
+      tuesday: ["1-5:30"],
+      wednesday: [],
+      thursday: [],
+      friday: [],
+      saturday: [],
+      sunday: ["12-8"],
+    },
   };
 
   let settings = null;
