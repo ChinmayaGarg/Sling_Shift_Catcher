@@ -5,7 +5,11 @@
   const OWN_USER_PATH = "/users/21528734";
   const OWN_USER_NAME = "Chinmaya Garg";
 
-  const STATE_KEY = "runtimeStateV4";
+  const STATE_KEY = "runtimeStateV5";
+  const DEBUG = false;
+
+  const SHIFT_START_MIN = 9 * 60; // 9:00 AM
+  const SHIFT_END_MAX = 22 * 60; // 10:00 PM
 
   const DEFAULTS = {
     enabled: true,
@@ -13,7 +17,6 @@
     dryRun: true,
     targetUrl:
       "https://app.getsling.com/messages/17153548/Winter-2026-shift-changes",
-    // targetUrl: "https://app.getsling.com/messages/17748799/Tejaswini-Patel",
     replyText: "I can",
     cooldownSec: 0,
     keywords: [
@@ -21,8 +24,8 @@
       "cover my shift",
       "can anyone take",
       "can any one take",
-      "can any one cover",
       "can anyone cover",
+      "can any one cover",
       "shift up for grabs",
       "shift available",
       "need someone to take",
@@ -30,11 +33,11 @@
       "can someone take my shift",
       "can anyone pick up",
       "pick up my shift",
-      "Shift giveaway",
-      "Shift open",
-      "Shift needs coverage",
-      "Shift coverage",
-      "Shift give away",
+      "shift giveaway",
+      "shift open",
+      "shift needs coverage",
+      "shift coverage",
+      "shift give away",
       "anyone able to work",
       "any one able to work",
       "giveaway shift",
@@ -42,7 +45,6 @@
       "giveaway",
       "give away",
     ].join("\n"),
-    freshWindowMs: 30000,
     minReplyDelayMs: 600,
     maxReplyDelayMs: 1200,
     maxMessageAgeMs: 2 * 60 * 1000,
@@ -58,6 +60,11 @@
   let suppressObserver = false;
 
   function log(...args) {
+    console.log("[Sling Shift Catcher]", ...args);
+  }
+
+  function debugLog(...args) {
+    if (!DEBUG) return;
     console.log("[Sling Shift Catcher]", ...args);
   }
 
@@ -144,9 +151,20 @@
   }
 
   async function setRuntimeState(nextState) {
-    log("Updating runtime state:", nextState);
     if (!isExtensionContextValid()) return;
     await chrome.storage.local.set({ [STATE_KEY]: nextState });
+  }
+
+  async function turnOnDryRunAfterSuccessfulReply() {
+    if (!isExtensionContextValid()) return;
+
+    settings = {
+      ...settings,
+      dryRun: true,
+    };
+
+    await chrome.storage.sync.set({ dryRun: true });
+    log("Auto-paused: dryRun turned ON after successful reply.");
   }
 
   function onCorrectChat() {
@@ -189,37 +207,16 @@
     );
   }
 
-  async function turnOnDryRunAfterSuccessfulReply() {
-    if (!isExtensionContextValid()) return;
-
-    settings = {
-      ...settings,
-      dryRun: true,
-    };
-
-    await chrome.storage.sync.set({
-      dryRun: true,
-    });
-
-    log("Auto-paused: dryRun turned ON after successful reply.");
+  function containsBlockedTestWords(text) {
+    const t = normalizeText(text);
+    return /\b(test|testing|bot|keyword|trigger|try this|checking|lol|haha|lmao|shadow|delivery|😀|😃|😄|😁|😆|😅|🤣|😂|🙂|😉|😊|😇|🥰|😍|🤩|😘|😗|☺️|😚|😙|🥲|😏)\b/.test(
+      t,
+    );
   }
 
-  const SHIFT_START_MIN = 9 * 60; // 9:00 AM
-  const SHIFT_END_MAX = 22 * 60; // 10:00 PM
-
-  function containsDayMention(text) {
+  function hasGiveawayPhrase(text, keywords) {
     const t = normalizeText(text);
-
-    const patterns = [
-      /\b(mon|monday|tue|tuesday|wed|wednesday|thu|thursday|fri|friday|sat|saturday|sun|sunday)\b/,
-      /\b(today|tomorrow|tmrw|tonight|afternoon|evening)\b/,
-      /\b\d{1,2}[/-]\d{1,2}\b/,
-      /\b\d{1,2}:\d{2}\s?(am|pm)\b/,
-      /\b\d{1,2}\s?(am|pm)\b/,
-      /\b(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\b/,
-    ];
-
-    return patterns.some((re) => re.test(t));
+    return keywords.some((k) => t.includes(k));
   }
 
   function parseLooseTimeToken(token, positionInRange) {
@@ -227,7 +224,7 @@
 
     const raw = token.trim().toLowerCase();
 
-    // h:mm am/pm  OR  h:mm
+    // h:mm am/pm OR h:mm
     let m = raw.match(/^(\d{1,2}):(\d{2})(?:\s*(am|pm))?$/i);
     if (m) {
       let hour = Number(m[1]);
@@ -246,7 +243,7 @@
         return hour * 60 + minute;
       }
 
-      // No am/pm
+      // No am/pm supplied
       if (hour === 12) return 12 * 60 + minute;
 
       if (hour >= 1 && hour <= 8) {
@@ -263,7 +260,7 @@
       return null;
     }
 
-    // h am/pm  OR  h
+    // h am/pm OR h
     m = raw.match(/^(\d{1,2})(?:\s*(am|pm))?$/i);
     if (m) {
       let hour = Number(m[1]);
@@ -280,7 +277,6 @@
         return hour * 60;
       }
 
-      // No am/pm
       if (hour === 12) return 12 * 60;
 
       if (hour >= 1 && hour <= 8) {
@@ -326,24 +322,23 @@
     return range.startMin >= SHIFT_START_MIN && range.endMin <= SHIFT_END_MAX;
   }
 
-  function hasGiveawayPhrase(text, keywords) {
-    const t = normalizeText(text);
-    return keywords.some((k) => t.includes(k));
-  }
-
   function isEligibleShiftMessage(text, keywords) {
     const hasPhrase = hasGiveawayPhrase(text, keywords);
-    const hasDay = containsDayMention(text);
     const hasAllowedRange = isAllowedShiftWindow(text);
     const hasBlockedWords = containsBlockedTestWords(text);
-    return !hasBlockedWords && hasPhrase && (hasAllowedRange || hasDay);
-  }
 
-  function containsBlockedTestWords(text) {
-    const t = normalizeText(text);
-    return /\b(test|testing|bot|keyword|trigger|try this|checking|lol|haha|lmao|shadow|delivery|😀|😃|😄|😁|😆|😅|🤣|😂|🙂|😉|😊|😇|🥰|😍|🤩|😘|😗|☺️|😚|😙|🥲|😏)\b/.test(
-      t,
-    );
+    debugLog("eligibility", {
+      text,
+      hasPhrase,
+      hasAllowedRange,
+      hasBlockedWords,
+      range: extractShiftRange(text),
+    });
+
+    // Require BOTH:
+    // 1) a giveaway phrase
+    // 2) a valid time range inside your allowed window
+    return !hasBlockedWords && hasPhrase && (hasAllowedRange || hasDay);
   }
 
   function parseSlingTimeToDate(timeText) {
@@ -368,7 +363,6 @@
     candidate.setSeconds(0, 0);
     candidate.setHours(hours, minutes, 0, 0);
 
-    // If it lands slightly in the future, assume it was yesterday near midnight.
     if (candidate.getTime() - now.getTime() > 60 * 1000) {
       candidate.setDate(candidate.getDate() - 1);
     }
@@ -382,13 +376,6 @@
     if (!postedAt) return null;
 
     return Date.now() - postedAt.getTime();
-  }
-
-  function isMessageWithinAgeLimit(item, maxAgeMs) {
-    const ageMs = getMessageAgeMsFromItem(item);
-    if (ageMs === null) return false;
-    if (ageMs < 0) return false;
-    return ageMs <= maxAgeMs;
   }
 
   function isOwnMessageItem(item) {
@@ -426,10 +413,7 @@
       const eligible = isEligibleShiftMessage(text, keywords);
       if (!eligible) return;
 
-      // if (!isLikelyRealShiftGiveaway(text)) return;
-
       const signature = buildMessageSignature(item, index);
-      // log("Found candidate message:", text, "signature:", signature);
       if (seenSignatures.includes(signature)) return;
 
       const { authorName, authorHref } = getMessageAuthorData(item);
@@ -526,7 +510,7 @@
     composer.dispatchEvent(new Event("change", { bubbles: true }));
 
     const finalText = getComposerPlainText(composer);
-    log("Composer visible text after insert:", JSON.stringify(finalText));
+    debugLog("Composer visible text after insert:", JSON.stringify(finalText));
 
     return inserted && finalText === text;
   }
@@ -569,6 +553,11 @@
   }
 
   async function replyNow(replyText) {
+    if (settings.dryRun) {
+      log("Dry run active inside replyNow. Not sending.");
+      return false;
+    }
+
     const composer = pickBestComposer();
 
     if (!composer) {
@@ -580,12 +569,12 @@
 
     try {
       const wrote = writeToComposer(composer, replyText);
-      log("Composer write result:", wrote);
+      debugLog("Composer write result:", wrote);
 
       await sleep(250);
 
       const persistedText = getComposerPlainText(composer);
-      log("Composer persisted text:", JSON.stringify(persistedText));
+      debugLog("Composer persisted text:", JSON.stringify(persistedText));
 
       if (persistedText !== replyText) {
         log("Slate rejected the edit; text did not persist.");
@@ -603,7 +592,7 @@
         sendButton.hasAttribute("disabled") ||
         sendButton.getAttribute("aria-disabled") === "true";
 
-      log("Send button found. Disabled:", disabled);
+      debugLog("Send button disabled:", disabled);
 
       if (disabled) {
         log("Send button still disabled after typing.");
@@ -767,9 +756,11 @@
           ...nextState.authorReplyTimes,
           [authorKey]: sentAt,
         };
+
         if (settings.autoPauseAfterSend) {
           await turnOnDryRunAfterSuccessfulReply();
         }
+
         await setRuntimeState(nextState);
       } else {
         log("Reply attempt failed; message marked as attempted to avoid loop.");
@@ -833,7 +824,7 @@
       return;
     }
 
-    log("Watching pinned Sling tab:", location.href);
+    log("Watching Sling chat:", location.href);
     startObserver();
     startHeartbeat();
     scheduleProcess(700);
