@@ -49,6 +49,7 @@
     maxMessageAgeMs: 2 * 60 * 1000,
     perAuthorCooldownMs: 30 * 60 * 1000,
     autoPauseAfterSend: true,
+    sameDayFeasibilityBufferMin: 15,
   };
 
   let settings = null;
@@ -314,6 +315,128 @@
     return { rawStart, rawEnd, startMin, endMin };
   }
 
+  const DAY_KEYS = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+  ];
+
+  function extractExplicitDayKey(text) {
+    const t = normalizeText(text);
+
+    if (/\btoday\b/.test(t)) {
+      return DAY_KEYS[new Date().getDay()];
+    }
+
+    if (/\b(tomorrow|tmrw|tonight)\b/.test(t)) {
+      return DAY_KEYS[(new Date().getDay() + 1) % 7];
+    }
+
+    if (/\b(mon|monday)\b/.test(t)) return "monday";
+    if (/\b(tue|tuesday)\b/.test(t)) return "tuesday";
+    if (/\b(wed|wednesday)\b/.test(t)) return "wednesday";
+    if (/\b(thu|thursday)\b/.test(t)) return "thursday";
+    if (/\b(fri|friday)\b/.test(t)) return "friday";
+    if (/\b(sat|saturday)\b/.test(t)) return "saturday";
+    if (/\b(sun|sunday)\b/.test(t)) return "sunday";
+
+    return null;
+  }
+
+  function inferShiftDayKey(text, shiftRange) {
+    const explicitDay = extractExplicitDayKey(text);
+    if (explicitDay) return explicitDay;
+
+    const now = new Date();
+    const todayKey = DAY_KEYS[now.getDay()];
+    const tomorrowKey = DAY_KEYS[(now.getDay() + 1) % 7];
+
+    if (!shiftRange) {
+      return todayKey;
+    }
+
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const bufferMin = Number(settings.sameDayFeasibilityBufferMin || 0);
+
+    // If the shift start is still realistically reachable today, assume today.
+    if (shiftRange.startMin >= nowMin + bufferMin) {
+      return todayKey;
+    }
+
+    // Otherwise assume tomorrow.
+    return tomorrowKey;
+  }
+
+  function parseBusyRangeString(rangeStr) {
+    const raw = normalizeText(rangeStr);
+    const m = raw.match(
+      /^(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s*(?:-|to)\s*(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)$/,
+    );
+
+    if (!m) return null;
+
+    const startMin = parseLooseTimeToken(m[1], "start");
+    const endMin = parseLooseTimeToken(m[2], "end");
+
+    if (startMin == null || endMin == null || endMin <= startMin) {
+      return null;
+    }
+
+    return { startMin, endMin };
+  }
+
+  function rangesOverlap(aStart, aEnd, bStart, bEnd) {
+    return aStart < bEnd && bStart < aEnd;
+  }
+
+  function isShiftBlockedByBusyWindows(text) {
+    if (!settings.busyWindowsEnabled) return false;
+
+    const shiftRange = extractShiftRange(text);
+    if (!shiftRange) return false;
+
+    const inferredDayKey = inferShiftDayKey(text, shiftRange);
+
+    const busyRanges = [
+      ...(Array.isArray(settings.busyWindowsAnyDay)
+        ? settings.busyWindowsAnyDay
+        : []),
+      ...(inferredDayKey &&
+      settings.busyWindowsByDay &&
+      Array.isArray(settings.busyWindowsByDay[inferredDayKey])
+        ? settings.busyWindowsByDay[inferredDayKey]
+        : []),
+    ];
+
+    for (const busyRangeStr of busyRanges) {
+      const busyRange = parseBusyRangeString(busyRangeStr);
+      if (!busyRange) continue;
+
+      if (
+        rangesOverlap(
+          shiftRange.startMin,
+          shiftRange.endMin,
+          busyRange.startMin,
+          busyRange.endMin,
+        )
+      ) {
+        debugLog("Busy-window block", {
+          text,
+          inferredDayKey,
+          shiftRange,
+          busyRangeStr,
+        });
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   function isAllowedShiftWindow(text) {
     const range = extractShiftRange(text);
     if (!range) return false;
@@ -325,19 +448,19 @@
     const hasPhrase = hasGiveawayPhrase(text, keywords);
     const hasAllowedRange = isAllowedShiftWindow(text);
     const hasBlockedWords = containsBlockedTestWords(text);
+    const blockedByBusy = isShiftBlockedByBusyWindows(text);
 
-    debugLog("eligibility", {
-      text,
-      hasPhrase,
-      hasAllowedRange,
-      hasBlockedWords,
-      range: extractShiftRange(text),
-    });
+    // debugLog("eligibility", {
+    //   text,
+    //   hasPhrase,
+    //   hasAllowedRange,
+    //   hasBlockedWords,
+    //   blockedByBusy,
+    //   range: extractShiftRange(text),
+    //   inferredDayKey: inferShiftDayKey(text, extractShiftRange(text)),
+    // });
 
-    // Require BOTH:
-    // 1) a giveaway phrase
-    // 2) a valid time range inside your allowed window
-    return !hasBlockedWords && hasPhrase && hasAllowedRange;
+    return !hasBlockedWords && hasPhrase && hasAllowedRange && !blockedByBusy;
   }
 
   function parseSlingTimeToDate(timeText) {
