@@ -17,6 +17,7 @@
     dryRun: true,
     targetUrl:
       "https://app.getsling.com/messages/17153548/Winter-2026-shift-changes",
+    // targetUrl: "https://app.getsling.com/messages/17748799/Tejaswini-Patel",
     replyText: "I can",
     cooldownSec: 0,
     keywords: [
@@ -887,6 +888,21 @@
           ...nextState.authorReplyTimes,
           [authorKey]: sentAt,
         };
+
+        try {
+          await chrome.runtime.sendMessage({
+            type: "SHIFT_REPLIED",
+            payload: {
+              authorName: match.authorName,
+              authorHref: match.authorHref,
+              text: match.text,
+              replyText: settings.replyText,
+              sentAt,
+            },
+          });
+        } catch (err) {
+          log("Phone alert send failed:", err);
+        }
 
         if (settings.autoPauseAfterSend) {
           await turnOnDryRunAfterSuccessfulReply();

@@ -262,4 +262,237 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: String(err) }));
     return true;
   }
+
+  if (message?.type === "SHIFT_REPLIED") {
+    sendPhoneAlert(message.payload)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
+
+  if (message?.type === "POLL_REMOTE_CONTROL_NOW") {
+    pollControlTopic()
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
 });
+
+chrome.runtime.onInstalled.addListener(async () => {
+  await chrome.alarms.create(CONTROL_ALARM_NAME, { periodInMinutes: 0.5 });
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  await chrome.alarms.create(CONTROL_ALARM_NAME, { periodInMinutes: 0.5 });
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === CONTROL_ALARM_NAME) {
+    try {
+      await pollControlTopic();
+    } catch (err) {
+      bgLog("Control poll failed:", err);
+    }
+  }
+});
+
+const NTFY_DEFAULTS = {
+  ntfyEnabled: true,
+  ntfyBaseUrl: "https://ntfy.sh",
+  ntfyAlertTopic: "sling-alerts-h4x7w9q2k6m1p8z",
+  ntfyControlTopic: "sling-control-h4x7w9q2k6m1p8z",
+  ntfyToken: "", // optional: Bearer token if you protect the topics
+};
+
+const CONTROL_ALARM_NAME = "poll-ntfy-control-topic";
+const NTFY_CONTROL_STATE_KEY = "ntfyControlState";
+
+function bgLog(...args) {
+  console.log("[Sling Shift Catcher BG]", ...args);
+}
+
+async function getAllSettings() {
+  const base = await chrome.storage.sync.get(DEFAULTS);
+  const ntfy = await chrome.storage.sync.get(NTFY_DEFAULTS);
+  return { ...base, ...ntfy };
+}
+
+function getNtfyHeaders(settings, extra = {}) {
+  const headers = { ...extra };
+  if (settings.ntfyToken) {
+    headers.Authorization = `Bearer ${settings.ntfyToken}`;
+  }
+  return headers;
+}
+
+async function getControlState() {
+  const data = await chrome.storage.local.get(NTFY_CONTROL_STATE_KEY);
+  return (
+    data[NTFY_CONTROL_STATE_KEY] || {
+      initialized: false,
+      lastMessageId: null,
+    }
+  );
+}
+
+async function setControlState(nextState) {
+  await chrome.storage.local.set({ [NTFY_CONTROL_STATE_KEY]: nextState });
+}
+
+function parseNdjson(text) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+async function primeControlCursor(settings) {
+  const url =
+    `${settings.ntfyBaseUrl}/${encodeURIComponent(settings.ntfyControlTopic)}` +
+    `/json?poll=1&since=latest`;
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: getNtfyHeaders(settings),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Prime control cursor failed: ${res.status}`);
+  }
+
+  const text = await res.text();
+  const events = parseNdjson(text);
+  const messages = events.filter((e) => e.event === "message");
+  const lastMessageId = messages.length
+    ? messages[messages.length - 1].id
+    : null;
+
+  await setControlState({
+    initialized: true,
+    lastMessageId,
+  });
+
+  bgLog("Control cursor primed. Last message id:", lastMessageId);
+}
+
+async function applyRemoteCommand(messageText) {
+  const cmd = (messageText || "").trim().toLowerCase();
+
+  if (cmd === "resume" || cmd === "resume_once") {
+    await chrome.storage.sync.set({ dryRun: false, enabled: true });
+    bgLog("Remote command applied: dryRun=false");
+    return;
+  }
+
+  if (cmd === "pause" || cmd === "dry_run_on") {
+    await chrome.storage.sync.set({ dryRun: true });
+    bgLog("Remote command applied: dryRun=true");
+    return;
+  }
+
+  bgLog("Ignoring unknown remote command:", cmd);
+}
+
+async function pollControlTopic() {
+  const settings = await getAllSettings();
+  if (!settings.ntfyEnabled) return;
+
+  const state = await getControlState();
+
+  if (!state.initialized) {
+    await primeControlCursor(settings);
+    return;
+  }
+
+  let url =
+    `${settings.ntfyBaseUrl}/${encodeURIComponent(settings.ntfyControlTopic)}` +
+    `/json?poll=1`;
+
+  if (state.lastMessageId) {
+    url += `&since=${encodeURIComponent(state.lastMessageId)}`;
+  } else {
+    url += `&since=latest`;
+  }
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: getNtfyHeaders(settings),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Poll control topic failed: ${res.status}`);
+  }
+
+  const text = await res.text();
+  const events = parseNdjson(text);
+  const messages = events.filter((e) => e.event === "message");
+
+  if (!messages.length) return;
+
+  let lastMessageId = state.lastMessageId;
+
+  for (const msg of messages) {
+    lastMessageId = msg.id || lastMessageId;
+    await applyRemoteCommand(msg.message || "");
+  }
+
+  await setControlState({
+    initialized: true,
+    lastMessageId,
+  });
+}
+
+async function sendPhoneAlert(payload) {
+  const settings = await getAllSettings();
+  if (!settings.ntfyEnabled) return;
+
+  const author = payload?.authorName || "Someone";
+  const text = payload?.text || "Shift message";
+  const replyText = payload?.replyText || "I can";
+
+  const action = {
+    action: "http",
+    label: "Resume once",
+    url: `${settings.ntfyBaseUrl}/${encodeURIComponent(settings.ntfyControlTopic)}`,
+    method: "POST",
+    body: "resume_once",
+    clear: true,
+  };
+
+  if (settings.ntfyToken) {
+    action.headers = {
+      Authorization: `Bearer ${settings.ntfyToken}`,
+    };
+  }
+
+  const body = {
+    topic: settings.ntfyAlertTopic,
+    title: "Sling bot replied",
+    message: `Replied "${replyText}" to ${author}: ${text}`,
+    priority: 4,
+    tags: ["white_check_mark", "calendar"],
+    actions: [action],
+  };
+
+  const res = await fetch(`${settings.ntfyBaseUrl}/`, {
+    method: "POST",
+    headers: getNtfyHeaders(settings, {
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    throw new Error(`ntfy alert failed: ${res.status}`);
+  }
+
+  bgLog("Phone alert sent.");
+}
