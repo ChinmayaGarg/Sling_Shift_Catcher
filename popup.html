@@ -6,13 +6,19 @@
     <style>
       body {
         font-family: Arial, sans-serif;
-        width: 340px;
+        width: 380px;
         padding: 12px;
+        box-sizing: border-box;
       }
 
       h2 {
         margin: 0 0 10px 0;
         font-size: 16px;
+      }
+
+      h3 {
+        margin: 14px 0 6px 0;
+        font-size: 14px;
       }
 
       label {
@@ -33,8 +39,12 @@
       }
 
       textarea {
-        min-height: 110px;
+        min-height: 72px;
         resize: vertical;
+      }
+
+      .small-area {
+        min-height: 58px;
       }
 
       .row {
@@ -48,6 +58,12 @@
         margin: 0;
       }
 
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+
       button {
         margin-top: 12px;
         width: 100%;
@@ -59,7 +75,6 @@
       .status {
         margin-top: 10px;
         font-size: 12px;
-        color: green;
         min-height: 16px;
       }
 
@@ -68,6 +83,12 @@
         font-size: 12px;
         color: #555;
         line-height: 1.4;
+      }
+
+      .section {
+        border-top: 1px solid #ddd;
+        margin-top: 14px;
+        padding-top: 10px;
       }
     </style>
   </head>
@@ -102,10 +123,65 @@
     <input id="replyText" type="text" />
 
     <label for="cooldownSec">Cooldown between replies (seconds)</label>
-    <input id="cooldownSec" type="number" min="1" />
+    <input id="cooldownSec" type="number" min="0" />
 
     <label for="keywords">Keywords / phrases (one per line)</label>
     <textarea id="keywords"></textarea>
+
+    <div class="section">
+      <h3>Busy times</h3>
+
+      <div class="row">
+        <input id="busyWindowsEnabled" type="checkbox" />
+        <label for="busyWindowsEnabled" style="margin: 0; font-weight: normal"
+          >Block replies during busy windows</label
+        >
+      </div>
+
+      <label for="busyWindowsAnyDay"
+        >General busy windows (every day, one per line)</label
+      >
+      <textarea
+        id="busyWindowsAnyDay"
+        class="small-area"
+        placeholder="12-1&#10;5-7"
+      ></textarea>
+
+      <div class="grid">
+        <div>
+          <label for="mondayBusy">Monday</label>
+          <textarea
+            id="mondayBusy"
+            class="small-area"
+            placeholder="9-11&#10;2-4"
+          ></textarea>
+        </div>
+        <div>
+          <label for="tuesdayBusy">Tuesday</label>
+          <textarea id="tuesdayBusy" class="small-area"></textarea>
+        </div>
+        <div>
+          <label for="wednesdayBusy">Wednesday</label>
+          <textarea id="wednesdayBusy" class="small-area"></textarea>
+        </div>
+        <div>
+          <label for="thursdayBusy">Thursday</label>
+          <textarea id="thursdayBusy" class="small-area"></textarea>
+        </div>
+        <div>
+          <label for="fridayBusy">Friday</label>
+          <textarea id="fridayBusy" class="small-area"></textarea>
+        </div>
+        <div>
+          <label for="saturdayBusy">Saturday</label>
+          <textarea id="saturdayBusy" class="small-area"></textarea>
+        </div>
+        <div>
+          <label for="sundayBusy">Sunday</label>
+          <textarea id="sundayBusy" class="small-area"></textarea>
+        </div>
+      </div>
+    </div>
 
     <button id="saveBtn">Save settings</button>
     <button id="openWatcherBtn">Open / Focus pinned watcher tab</button>
@@ -113,8 +189,8 @@
     <div id="status" class="status"></div>
 
     <div class="note">
-      Keep Dry run on first. Then open the pinned Sling tab and watch the
-      console logs.
+      Busy time format: one range per line, for example <b>9-11</b>,
+      <b>4:30-8</b>, or <b>9 am to 4 pm</b>.
     </div>
 
     <script src="popup.js"></script>

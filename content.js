@@ -51,14 +51,16 @@
     perAuthorCooldownMs: 30 * 60 * 1000,
     autoPauseAfterSend: true,
     sameDayFeasibilityBufferMin: 15,
+    busyWindowsEnabled: true,
+    busyWindowsAnyDay: [],
     busyWindowsByDay: {
       monday: [],
-      tuesday: ["1-5:30"],
+      tuesday: [],
       wednesday: [],
       thursday: [],
       friday: [],
       saturday: [],
-      sunday: ["12-8"],
+      sunday: [],
     },
   };
 
@@ -219,7 +221,7 @@
 
   function containsBlockedTestWords(text) {
     const t = normalizeText(text);
-    return /\b(test|testing|bot|keyword|trigger|try this|checking|lol|haha|lmao|shadow|delivery|😀|😃|😄|😁|😆|😅|🤣|😂|🙂|😉|😊|😇|🥰|😍|🤩|😘|😗|☺️|😚|😙|🥲|😏)\b/.test(
+    return /\b(test|testing|bot|keyword|trigger|try this|checking|lol|haha|lmao|shadow|delivery|mah|g 28|g28|😀|😃|😄|😁|😆|😅|🤣|😂|🙂|😉|😊|😇|🥰|😍|🤩|😘|😗|☺️|😚|😙|🥲|😏)\b/.test(
       t,
     );
   }
