@@ -5,11 +5,29 @@
   const OWN_USER_PATH = "/users/21528734";
   const OWN_USER_NAME = "Chinmaya Garg";
 
-  const STATE_KEY = "runtimeStateV5";
+  const STATE_KEY = "runtimeStateV6";
   const DEBUG = false;
 
-  const SHIFT_START_MIN = 9 * 60; // 9:00 AM
-  const SHIFT_END_MAX = 22 * 60; // 10:00 PM
+  // Shift constraints
+  const SHIFT_OPEN_MIN = 8 * 60; // 8:00 AM
+  const SHIFT_CLOSE_MIN = 22 * 60; // 10:00 PM
+  const SHIFT_MAX_START_MIN = 20 * 60; // 8:00 PM
+  const SHIFT_MIN_DURATION_MIN = 75; // 1h 15m
+  const SHIFT_MAX_DURATION_MIN = 6 * 60;
+
+  // Busy-window office bounds
+  const OFFICE_OPEN_MIN = 8 * 60; // 8:00 AM
+  const OFFICE_CLOSE_MIN = 22 * 60; // 10:00 PM
+
+  const DAY_KEYS = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+  ];
 
   const DEFAULTS = {
     enabled: true,
@@ -123,13 +141,11 @@
     perAuthorCooldownMs,
   ) {
     const pruned = {};
-
     for (const [key, ts] of Object.entries(authorReplyTimes || {})) {
       if (now - Number(ts) <= perAuthorCooldownMs) {
         pruned[key] = Number(ts);
       }
     }
-
     return pruned;
   }
 
@@ -221,7 +237,7 @@
 
   function containsBlockedTestWords(text) {
     const t = normalizeText(text);
-    return /\b(test|testing|bot|keyword|trigger|try this|checking|lol|haha|lmao|shadow|delivery|mah|g 28|g28|😀|😃|😄|😁|😆|😅|🤣|😂|🙂|😉|😊|😇|🥰|😍|🤩|😘|😗|☺️|😚|😙|🥲|😏)\b/.test(
+    return /\b(test|testing|bot|keyword|trigger|try this|checking|lol|haha|lmao|shadow|delivery|mah|g 28|g28)\b/.test(
       t,
     );
   }
@@ -231,82 +247,210 @@
     return keywords.some((k) => t.includes(k));
   }
 
-  function parseLooseTimeToken(token, positionInRange) {
+  function parseExplicitTimeToken(token) {
     if (!token) return null;
 
     const raw = token.trim().toLowerCase();
 
-    // h:mm am/pm OR h:mm
-    let m = raw.match(/^(\d{1,2}):(\d{2})(?:\s*(am|pm))?$/i);
+    let m = raw.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
     if (m) {
       let hour = Number(m[1]);
       const minute = Number(m[2]);
-      const meridiem = m[3] ? m[3].toLowerCase() : null;
+      const meridiem = m[3].toLowerCase();
 
-      if (minute < 0 || minute > 59) return null;
+      if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
 
-      if (meridiem) {
-        if (hour < 1 || hour > 12) return null;
-        if (meridiem === "am") {
-          if (hour === 12) hour = 0;
-        } else {
-          if (hour !== 12) hour += 12;
-        }
-        return hour * 60 + minute;
+      if (meridiem === "am") {
+        if (hour === 12) hour = 0;
+      } else {
+        if (hour !== 12) hour += 12;
       }
 
-      // No am/pm supplied
-      if (hour === 12) return 12 * 60 + minute;
-
-      if (hour >= 1 && hour <= 8) {
-        return (hour + 12) * 60 + minute; // PM
-      }
-
-      if (hour >= 9 && hour <= 11) {
-        if (positionInRange === "start") {
-          return hour * 60 + minute; // AM
-        }
-        return (hour + 12) * 60 + minute; // PM
-      }
-
-      return null;
+      return hour * 60 + minute;
     }
 
-    // h am/pm OR h
-    m = raw.match(/^(\d{1,2})(?:\s*(am|pm))?$/i);
+    m = raw.match(/^(\d{1,2})\s*(am|pm)$/i);
     if (m) {
       let hour = Number(m[1]);
-      const meridiem = m[2] ? m[2].toLowerCase() : null;
+      const meridiem = m[2].toLowerCase();
 
       if (hour < 1 || hour > 12) return null;
 
-      if (meridiem) {
-        if (meridiem === "am") {
-          if (hour === 12) hour = 0;
-        } else {
-          if (hour !== 12) hour += 12;
-        }
-        return hour * 60;
+      if (meridiem === "am") {
+        if (hour === 12) hour = 0;
+      } else {
+        if (hour !== 12) hour += 12;
       }
 
-      if (hour === 12) return 12 * 60;
-
-      if (hour >= 1 && hour <= 8) {
-        return (hour + 12) * 60; // PM
-      }
-
-      if (hour >= 9 && hour <= 11) {
-        if (positionInRange === "start") {
-          return hour * 60; // AM
-        }
-        return (hour + 12) * 60; // PM
-      }
+      return hour * 60;
     }
 
     return null;
   }
 
-  function extractShiftRange(text) {
+  function parseRawTimeParts(token) {
+    if (!token) return null;
+
+    const raw = token.trim().toLowerCase();
+
+    let m = raw.match(/^(\d{1,2}):(\d{2})(?:\s*(am|pm))?$/i);
+    if (m) {
+      return {
+        hour: Number(m[1]),
+        minute: Number(m[2]),
+        meridiem: m[3] ? m[3].toLowerCase() : null,
+      };
+    }
+
+    m = raw.match(/^(\d{1,2})(?:\s*(am|pm))?$/i);
+    if (m) {
+      return {
+        hour: Number(m[1]),
+        minute: 0,
+        meridiem: m[2] ? m[2].toLowerCase() : null,
+      };
+    }
+
+    return null;
+  }
+
+  function toMinutes(hour12, minute, meridiem) {
+    let hour = hour12;
+
+    if (meridiem === "am") {
+      if (hour === 12) hour = 0;
+    } else if (meridiem === "pm") {
+      if (hour !== 12) hour += 12;
+    } else {
+      return null;
+    }
+
+    return hour * 60 + minute;
+  }
+
+  // Shift inference rules:
+  // 1-7,12 => PM
+  // 11 => AM
+  // 8-10 => ambiguous
+  function buildShiftTimeCandidates(token, positionInRange, postedAtMin) {
+    const parts = parseRawTimeParts(token);
+    if (!parts) return [];
+
+    const { hour, minute, meridiem } = parts;
+
+    if (hour < 1 || hour > 12 || minute < 0 || minute > 59) {
+      return [];
+    }
+
+    if (meridiem) {
+      const exact = toMinutes(hour, minute, meridiem);
+      return exact == null ? [] : [exact];
+    }
+
+    if (hour >= 1 && hour <= 7) {
+      return [toMinutes(hour, minute, "pm")];
+    }
+
+    if (hour === 11) {
+      return [toMinutes(hour, minute, "am")];
+    }
+
+    if (hour === 12) {
+      return [toMinutes(hour, minute, "pm")];
+    }
+
+    if (hour >= 8 && hour <= 10) {
+      if (hour === 8 || hour === 9) {
+        const am = toMinutes(hour, minute, "am");
+        const pm = toMinutes(hour, minute, "pm");
+
+        if (hour === 8 && positionInRange === "start") {
+          if (postedAtMin != null && postedAtMin < 8 * 60) {
+            return [am, pm];
+          }
+          return [pm, am];
+        }
+
+        return positionInRange === "start" ? [am, pm] : [pm, am];
+      }
+
+      if (hour === 10) {
+        const am = toMinutes(hour, minute, "am");
+        const pm = toMinutes(hour, minute, "pm");
+        return positionInRange === "start" ? [am, pm] : [pm, am];
+      }
+    }
+
+    return [];
+  }
+
+  function isValidShiftRange(startMin, endMin) {
+    if (startMin == null || endMin == null) return false;
+    if (endMin <= startMin) return false;
+
+    const duration = endMin - startMin;
+
+    if (startMin < SHIFT_OPEN_MIN) return false;
+    if (endMin > SHIFT_CLOSE_MIN) return false;
+    if (startMin > SHIFT_MAX_START_MIN) return false;
+    if (duration < SHIFT_MIN_DURATION_MIN) return false;
+    if (duration > SHIFT_MAX_DURATION_MIN) return false;
+
+    return true;
+  }
+
+  function scoreShiftCandidate(startMin, endMin, postedAtMin, rawStartHour) {
+    let score = 0;
+
+    if (rawStartHour === 8 && postedAtMin != null) {
+      const prefersMorning = postedAtMin < 8 * 60;
+      const isMorning = startMin < 12 * 60;
+
+      if (prefersMorning !== isMorning) {
+        score += 50;
+      }
+    }
+
+    score += startMin / 10000;
+    return score;
+  }
+
+  function parseSlingTimeToDate(timeText) {
+    const raw = (timeText || "").trim();
+    if (!raw) return null;
+
+    const match = raw.match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+    if (!match) return null;
+
+    let hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    const meridiem = match[3].toUpperCase();
+
+    if (meridiem === "AM") {
+      if (hours === 12) hours = 0;
+    } else {
+      if (hours !== 12) hours += 12;
+    }
+
+    const now = new Date();
+    const candidate = new Date(now);
+    candidate.setSeconds(0, 0);
+    candidate.setHours(hours, minutes, 0, 0);
+
+    if (candidate.getTime() - now.getTime() > 60 * 1000) {
+      candidate.setDate(candidate.getDate() - 1);
+    }
+
+    return candidate;
+  }
+
+  function getPostedAtMinutesFromItem(item) {
+    const postedAt = parseSlingTimeToDate(getMessageTimeText(item));
+    if (!postedAt) return null;
+    return postedAt.getHours() * 60 + postedAt.getMinutes();
+  }
+
+  function extractShiftRangeFromText(text, postedAtMin = null) {
     const t = normalizeText(text);
 
     const rangeRe =
@@ -318,24 +462,56 @@
     const rawStart = m[1];
     const rawEnd = m[2];
 
-    const startMin = parseLooseTimeToken(rawStart, "start");
-    const endMin = parseLooseTimeToken(rawEnd, "end");
+    const startParts = parseRawTimeParts(rawStart);
+    const endParts = parseRawTimeParts(rawEnd);
 
-    if (startMin == null || endMin == null) return null;
-    if (endMin <= startMin) return null;
+    if (!startParts || !endParts) return null;
 
-    return { rawStart, rawEnd, startMin, endMin };
+    const startCandidates = buildShiftTimeCandidates(
+      rawStart,
+      "start",
+      postedAtMin,
+    );
+    const endCandidates = buildShiftTimeCandidates(rawEnd, "end", postedAtMin);
+
+    if (!startCandidates.length || !endCandidates.length) return null;
+
+    const validCandidates = [];
+
+    for (const startMin of startCandidates) {
+      for (const endMin of endCandidates) {
+        if (!isValidShiftRange(startMin, endMin)) continue;
+
+        validCandidates.push({
+          rawStart,
+          rawEnd,
+          startMin,
+          endMin,
+          durationMin: endMin - startMin,
+          score: scoreShiftCandidate(
+            startMin,
+            endMin,
+            postedAtMin,
+            startParts.hour,
+          ),
+        });
+      }
+    }
+
+    if (!validCandidates.length) return null;
+
+    validCandidates.sort((a, b) => a.score - b.score);
+    return validCandidates[0];
   }
 
-  const DAY_KEYS = [
-    "sunday",
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
-  ];
+  function extractShiftRange(text, item = null) {
+    const postedAtMin = item ? getPostedAtMinutesFromItem(item) : null;
+    return extractShiftRangeFromText(text, postedAtMin);
+  }
+
+  function isAllowedShiftWindow(text, item = null) {
+    return !!extractShiftRange(text, item);
+  }
 
   function extractExplicitDayKey(text) {
     const t = normalizeText(text);
@@ -367,76 +543,32 @@
     const todayKey = DAY_KEYS[now.getDay()];
     const tomorrowKey = DAY_KEYS[(now.getDay() + 1) % 7];
 
-    if (!shiftRange) {
-      return todayKey;
-    }
+    if (!shiftRange) return todayKey;
 
     const nowMin = now.getHours() * 60 + now.getMinutes();
     const bufferMin = Number(settings.sameDayFeasibilityBufferMin || 0);
 
-    // If the shift start is still realistically reachable today, assume today.
     if (shiftRange.startMin >= nowMin + bufferMin) {
       return todayKey;
     }
 
-    // Otherwise assume tomorrow.
     return tomorrowKey;
   }
 
-  const OFFICE_OPEN_MIN = 8 * 60; // 8:00 AM
-  const OFFICE_CLOSE_MIN = 22 * 60; // 10:00 PM
-
-  function parseExplicitTimeToken(token) {
-    if (!token) return null;
-
-    const raw = token.trim().toLowerCase();
-
-    let m = raw.match(/^(\d{1,2}):(\d{2})(?:\s*(am|pm))$/i);
-    if (m) {
-      let hour = Number(m[1]);
-      const minute = Number(m[2]);
-      const meridiem = m[3].toLowerCase();
-
-      if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
-
-      if (meridiem === "am") {
-        if (hour === 12) hour = 0;
-      } else {
-        if (hour !== 12) hour += 12;
-      }
-
-      return hour * 60 + minute;
-    }
-
-    m = raw.match(/^(\d{1,2})(?:\s*(am|pm))$/i);
-    if (m) {
-      let hour = Number(m[1]);
-      const meridiem = m[2].toLowerCase();
-
-      if (hour < 1 || hour > 12) return null;
-
-      if (meridiem === "am") {
-        if (hour === 12) hour = 0;
-      } else {
-        if (hour !== 12) hour += 12;
-      }
-
-      return hour * 60;
-    }
-
-    return null;
-  }
-
+  // Busy-time rules:
+  // 1-7 => PM
+  // 8-9 => start AM, end PM
+  // 10 => AM
+  // 11 => AM
+  // 12 => PM
   function parseBusyTimeToken(token, positionInRange) {
     if (!token) return null;
 
     const raw = token.trim().toLowerCase();
 
-    // explicit am/pm always wins
     const explicit = parseExplicitTimeToken(raw);
     if (explicit != null) return explicit;
 
-    // h:mm without am/pm
     let m = raw.match(/^(\d{1,2}):(\d{2})$/);
     if (m) {
       const hour = Number(m[1]);
@@ -445,18 +577,19 @@
       if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
 
       if (hour >= 1 && hour <= 7) return (hour + 12) * 60 + minute; // PM
+
       if (hour === 8 || hour === 9) {
         return positionInRange === "start"
-          ? hour * 60 + minute // AM
-          : (hour + 12) * 60 + minute; // PM
+          ? hour * 60 + minute
+          : (hour + 12) * 60 + minute;
       }
+
       if (hour === 10 || hour === 11) return hour * 60 + minute; // AM
       if (hour === 12) return 12 * 60 + minute; // PM
 
       return null;
     }
 
-    // h without am/pm
     m = raw.match(/^(\d{1,2})$/);
     if (m) {
       const hour = Number(m[1]);
@@ -464,11 +597,11 @@
       if (hour < 1 || hour > 12) return null;
 
       if (hour >= 1 && hour <= 7) return (hour + 12) * 60; // PM
+
       if (hour === 8 || hour === 9) {
-        return positionInRange === "start"
-          ? hour * 60 // AM
-          : (hour + 12) * 60; // PM
+        return positionInRange === "start" ? hour * 60 : (hour + 12) * 60;
       }
+
       if (hour === 10 || hour === 11) return hour * 60; // AM
       if (hour === 12) return 12 * 60; // PM
     }
@@ -480,13 +613,11 @@
     if (!token) return null;
 
     const raw = token.trim().toLowerCase();
-
-    // already explicit => don't override
     if (/\b(am|pm)\b/.test(raw)) return null;
 
     let m = raw.match(/^(\d{1,2}):(\d{2})$/);
     if (m) {
-      let hour = Number(m[1]);
+      const hour = Number(m[1]);
       const minute = Number(m[2]);
 
       if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
@@ -497,7 +628,7 @@
 
     m = raw.match(/^(\d{1,2})$/);
     if (m) {
-      let hour = Number(m[1]);
+      const hour = Number(m[1]);
 
       if (hour < 1 || hour > 12) return null;
 
@@ -532,12 +663,10 @@
 
     if (startMin == null || endMin == null) return null;
 
-    // normal success
     if (isWithinOfficeWindow(startMin, endMin)) {
       return { startMin, endMin };
     }
 
-    // fallback: if end is ambiguous, try interpreting it as PM
     const endPmFallback = endTokenToPmFallback(rawEnd);
     if (
       endPmFallback != null &&
@@ -553,10 +682,10 @@
     return aStart < bEnd && bStart < aEnd;
   }
 
-  function isShiftBlockedByBusyWindows(text) {
+  function isShiftBlockedByBusyWindows(text, item = null) {
     if (!settings.busyWindowsEnabled) return false;
 
-    const shiftRange = extractShiftRange(text);
+    const shiftRange = extractShiftRange(text, item);
     if (!shiftRange) return false;
 
     const inferredDayKey = inferShiftDayKey(text, shiftRange);
@@ -597,59 +726,22 @@
     return false;
   }
 
-  function isAllowedShiftWindow(text) {
-    const range = extractShiftRange(text);
-    if (!range) return false;
-
-    return range.startMin >= SHIFT_START_MIN && range.endMin <= SHIFT_END_MAX;
-  }
-
-  function isEligibleShiftMessage(text, keywords) {
+  function isEligibleShiftMessage(text, keywords, item = null) {
     const hasPhrase = hasGiveawayPhrase(text, keywords);
-    const hasAllowedRange = isAllowedShiftWindow(text);
+    const hasAllowedRange = isAllowedShiftWindow(text, item);
     const hasBlockedWords = containsBlockedTestWords(text);
-    const blockedByBusy = isShiftBlockedByBusyWindows(text);
+    const blockedByBusy = isShiftBlockedByBusyWindows(text, item);
 
-    // debugLog("eligibility", {
-    //   text,
-    //   hasPhrase,
-    //   hasAllowedRange,
-    //   hasBlockedWords,
-    //   blockedByBusy,
-    //   range: extractShiftRange(text),
-    //   inferredDayKey: inferShiftDayKey(text, extractShiftRange(text)),
-    // });
+    debugLog("eligibility", {
+      text,
+      hasPhrase,
+      hasAllowedRange,
+      hasBlockedWords,
+      blockedByBusy,
+      range: extractShiftRange(text, item),
+    });
 
     return !hasBlockedWords && hasPhrase && hasAllowedRange && !blockedByBusy;
-  }
-
-  function parseSlingTimeToDate(timeText) {
-    const raw = (timeText || "").trim();
-    if (!raw) return null;
-
-    const match = raw.match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
-    if (!match) return null;
-
-    let hours = Number(match[1]);
-    const minutes = Number(match[2]);
-    const meridiem = match[3].toUpperCase();
-
-    if (meridiem === "AM") {
-      if (hours === 12) hours = 0;
-    } else {
-      if (hours !== 12) hours += 12;
-    }
-
-    const now = new Date();
-    const candidate = new Date(now);
-    candidate.setSeconds(0, 0);
-    candidate.setHours(hours, minutes, 0, 0);
-
-    if (candidate.getTime() - now.getTime() > 60 * 1000) {
-      candidate.setDate(candidate.getDate() - 1);
-    }
-
-    return candidate;
   }
 
   function getMessageAgeMsFromItem(item) {
@@ -692,7 +784,7 @@
 
       if (isOwnMessageItem(item)) return;
 
-      const eligible = isEligibleShiftMessage(text, keywords);
+      const eligible = isEligibleShiftMessage(text, keywords, item);
       if (!eligible) return;
 
       const signature = buildMessageSignature(item, index);
@@ -700,6 +792,7 @@
 
       const { authorName, authorHref } = getMessageAuthorData(item);
       const ageMs = getMessageAgeMsFromItem(item);
+      const shiftRange = extractShiftRange(text, item);
 
       matches.push({
         el: item,
@@ -708,6 +801,7 @@
         authorName,
         authorHref,
         ageMs,
+        shiftRange,
       });
     });
 
@@ -1012,6 +1106,10 @@
         "ageMs:",
         match.ageMs,
       );
+
+      if (match.shiftRange) {
+        debugLog("Shift range inferred:", match.shiftRange);
+      }
 
       const nextState = {
         seenSignatures: [
