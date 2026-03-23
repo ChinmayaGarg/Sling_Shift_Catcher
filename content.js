@@ -383,6 +383,139 @@
     return tomorrowKey;
   }
 
+  const OFFICE_OPEN_MIN = 8 * 60; // 8:00 AM
+  const OFFICE_CLOSE_MIN = 22 * 60; // 10:00 PM
+
+  function parseExplicitTimeToken(token) {
+    if (!token) return null;
+
+    const raw = token.trim().toLowerCase();
+
+    let m = raw.match(/^(\d{1,2}):(\d{2})(?:\s*(am|pm))$/i);
+    if (m) {
+      let hour = Number(m[1]);
+      const minute = Number(m[2]);
+      const meridiem = m[3].toLowerCase();
+
+      if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
+
+      if (meridiem === "am") {
+        if (hour === 12) hour = 0;
+      } else {
+        if (hour !== 12) hour += 12;
+      }
+
+      return hour * 60 + minute;
+    }
+
+    m = raw.match(/^(\d{1,2})(?:\s*(am|pm))$/i);
+    if (m) {
+      let hour = Number(m[1]);
+      const meridiem = m[2].toLowerCase();
+
+      if (hour < 1 || hour > 12) return null;
+
+      if (meridiem === "am") {
+        if (hour === 12) hour = 0;
+      } else {
+        if (hour !== 12) hour += 12;
+      }
+
+      return hour * 60;
+    }
+
+    return null;
+  }
+
+  function parseBusyTimeToken(token, positionInRange) {
+    if (!token) return null;
+
+    const raw = token.trim().toLowerCase();
+
+    // explicit am/pm always wins
+    const explicit = parseExplicitTimeToken(raw);
+    if (explicit != null) return explicit;
+
+    // h:mm without am/pm
+    let m = raw.match(/^(\d{1,2}):(\d{2})$/);
+    if (m) {
+      const hour = Number(m[1]);
+      const minute = Number(m[2]);
+
+      if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
+
+      if (hour >= 1 && hour <= 7) return (hour + 12) * 60 + minute; // PM
+      if (hour === 8 || hour === 9) {
+        return positionInRange === "start"
+          ? hour * 60 + minute // AM
+          : (hour + 12) * 60 + minute; // PM
+      }
+      if (hour === 10 || hour === 11) return hour * 60 + minute; // AM
+      if (hour === 12) return 12 * 60 + minute; // PM
+
+      return null;
+    }
+
+    // h without am/pm
+    m = raw.match(/^(\d{1,2})$/);
+    if (m) {
+      const hour = Number(m[1]);
+
+      if (hour < 1 || hour > 12) return null;
+
+      if (hour >= 1 && hour <= 7) return (hour + 12) * 60; // PM
+      if (hour === 8 || hour === 9) {
+        return positionInRange === "start"
+          ? hour * 60 // AM
+          : (hour + 12) * 60; // PM
+      }
+      if (hour === 10 || hour === 11) return hour * 60; // AM
+      if (hour === 12) return 12 * 60; // PM
+    }
+
+    return null;
+  }
+
+  function endTokenToPmFallback(token) {
+    if (!token) return null;
+
+    const raw = token.trim().toLowerCase();
+
+    // already explicit => don't override
+    if (/\b(am|pm)\b/.test(raw)) return null;
+
+    let m = raw.match(/^(\d{1,2}):(\d{2})$/);
+    if (m) {
+      let hour = Number(m[1]);
+      const minute = Number(m[2]);
+
+      if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
+
+      if (hour === 12) return 12 * 60 + minute;
+      return (hour + 12) * 60 + minute;
+    }
+
+    m = raw.match(/^(\d{1,2})$/);
+    if (m) {
+      let hour = Number(m[1]);
+
+      if (hour < 1 || hour > 12) return null;
+
+      if (hour === 12) return 12 * 60;
+      return (hour + 12) * 60;
+    }
+
+    return null;
+  }
+
+  function isWithinOfficeWindow(startMin, endMin) {
+    return (
+      startMin >= OFFICE_OPEN_MIN &&
+      endMin <= OFFICE_CLOSE_MIN &&
+      endMin > startMin
+    );
+  }
+
   function parseBusyRangeString(rangeStr) {
     const raw = normalizeText(rangeStr);
     const m = raw.match(
@@ -391,14 +524,29 @@
 
     if (!m) return null;
 
-    const startMin = parseLooseTimeToken(m[1], "start");
-    const endMin = parseLooseTimeToken(m[2], "end");
+    const rawStart = m[1];
+    const rawEnd = m[2];
 
-    if (startMin == null || endMin == null || endMin <= startMin) {
-      return null;
+    let startMin = parseBusyTimeToken(rawStart, "start");
+    let endMin = parseBusyTimeToken(rawEnd, "end");
+
+    if (startMin == null || endMin == null) return null;
+
+    // normal success
+    if (isWithinOfficeWindow(startMin, endMin)) {
+      return { startMin, endMin };
     }
 
-    return { startMin, endMin };
+    // fallback: if end is ambiguous, try interpreting it as PM
+    const endPmFallback = endTokenToPmFallback(rawEnd);
+    if (
+      endPmFallback != null &&
+      isWithinOfficeWindow(startMin, endPmFallback)
+    ) {
+      return { startMin, endMin: endPmFallback };
+    }
+
+    return null;
   }
 
   function rangesOverlap(aStart, aEnd, bStart, bEnd) {
